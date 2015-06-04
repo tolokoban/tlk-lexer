@@ -4,7 +4,7 @@ var Lexer = require("../src/tlk-lexer");
 describe("Lexer", function() {
   describe("simple arithmetic", function() {
     beforeAll(function() {
-      this.$ = function(text, expected) {
+      this.check = function(text, expected) {
         var lex = new Lexer(
           {
             SPC: "[ \t\n\r]+",
@@ -31,7 +31,7 @@ describe("Lexer", function() {
       };
     });
     it("should handle simple arithmetic", function() {
-      this.$("  57 + 3 * 21", "NUM, ADD, NUM, MUL, NUM");
+      this.check("  57 + 3 * 21", "NUM, ADD, NUM, MUL, NUM");
     });
   });
 });
