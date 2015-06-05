@@ -31,10 +31,10 @@ var ruleLexer = new Lexer(
  * );
  * @class TlkScanner
  */
-var TlkScanner = function(args) {  
+var TlkScanner = function(args) {
   if (typeof args.ignore === 'undefined') args.ignore = [];
   if (typeof args.hooks === 'undefined') args.hooks = {};
-  this._hooks = args.hooks;
+  this.setHooks(args.hooks);
   this._rules = {};
   this._tokens = args.tokens;
   this._lexer = new Lexer(args.tokens);
@@ -51,11 +51,70 @@ var TlkScanner = function(args) {
       this._mainRule = key;
     }
     val = this._rules[key];
-    f = functionalize.call(this, val);
-    f.id = "Rule_" + key;
+    f = functionalize.call(this, val, key);
     this._rules[key] = f;
   }
   this._args = args;
+};
+
+/**
+ * @return void
+ */
+TlkScanner.prototype.setHooks = function(hooks) {
+  this._hooks = hooks;
+};
+
+/**
+ * @return void
+ */
+TlkScanner.prototype.debugText = function(source, ruleName) {
+  this._lexer.loadText(source);
+  var ctx = {level: 0, tokens: this._lexer.all(this._args.ignore), out: ''};
+  var indent = function(v) {
+    var out = '';
+    while (v > 0) {
+      out += "  ";
+      v--;
+    }
+    return out;
+  };
+  var slotToken = function(text, hookItem) {
+    this.out += indent(this.level) + hookItem.id + ': "' + text + '"\n';
+  };
+  var slotRule = function(topDown, hookItem) {
+    if (topDown) {
+      var tkn;
+      var out = indent(this.level);
+      out += hookItem.id + ': "';
+      var complete = true;
+      for (var i = Math.max(0, hookItem.begin) ; i < hookItem.end ; i++) {
+        if (out.length > 70) {
+          complete = false;
+          break;
+        }
+        tkn = this.tokens[i];
+        out += tkn.buffer.text.substr(tkn.begin, tkn.end - tkn.begin);
+      }
+      out += '"';
+      if (!complete) out += '...';
+      this.out += out + "\n";
+      this.level++;
+    } else {
+      this.level--;
+    }
+  };
+  var hooks = {}, key;
+  for (key in this._rules) {
+    hooks[key] = slotRule;
+  }
+  for (key in this._tokens) {
+    hooks[key] = slotToken;
+  }
+  this.setHooks(hooks);
+  if (this.parseText(source, ctx, ruleName)) {
+    return ctx.out;
+  }
+  return null;
 };
 
 /**
@@ -72,8 +131,24 @@ TlkScanner.prototype.parseText = function(source, context, ruleName) {
   this._lexer.loadText(source);
   this._all = this._lexer.all(this._args.ignore);
   this._cursor = 0;
-  this._tree = {};
-  return rule.call(this);
+  // the  hooks chain  is  used  to deal  with  backtracking in  grammar
+  // checking.  Hooks are added as soon as they match, but if the parent
+  // rule fails, we have too rollback the child hooks.
+  // A hook is an object:
+  // {id: ..., begin: ..., end: ...} for rules
+  // {id: ..., begin: ...} for tokens
+  //
+  this._hooksChain = [];
+  if (this._hooks[ruleName]) {
+    this._hooksChain.push({id: ruleName, begin: -1, end: this._all.length});
+  }
+  this._log = [];
+  //var result = rule.call(this);
+  var result = rule.exec();
+  if (result && this._hooksChain.length > 0) {
+    processHooks(this._hooksChain, this._hooks, context, this._all);
+  }
+  return result;
 };
 
 /**
@@ -109,11 +184,111 @@ function build(rule, lex) {
 }
 
 /**
+ * @param hooksChain {array} Array from the tail of which we want to remove all items with index > cursor.
+ * @param cursor {number} Index of the last valid hooks' chain's item.
+ */
+function rollbackHooks(hooksChain, cursor) {
+  var idx = hooksChain.length - 1;
+  while (idx > -1 && hooksChain[idx].begin >= cursor) {
+    hooksChain.pop();
+    idx--;
+  }
+}
+
+var MatcherToken = function(id, that, name) { this.id = id; this.that = that; this.name = name; };
+MatcherToken.prototype.exec = function() {
+  var that = this.that;
+  if (that.eof()) return false;
+  var tkn = that.next();
+  if (tkn.id == this.name) {
+    if (typeof that._hooks[tkn.id] !== 'undefined') {
+      that._hooksChain.push({id: tkn.id, begin: that._cursor - 1});
+    }
+    return true;
+  }
+  that._cursor--;
+  return false;
+};
+
+var MatcherRule = function(id, that, name) { this.id = id; this.that = that; this.name = name; };
+MatcherRule.prototype.exec = function() {
+  var that = this.that;
+  var rule;
+  if (typeof that._hooks[this.name] !== 'undefined') {
+    var hookItem = {id: this.name, begin: that._cursor};
+    that._hooksChain.push(hookItem);
+    rule = that._rules[this.name];
+    var result = rule.exec();
+    if (!result) {
+      rollbackHooks(that._hooksChain, hookItem.begin);
+      return false;
+    }
+    hookItem.end = that._cursor;
+    return true;
+  }
+  rule = that._rules[this.name];
+  return rule.exec();
+};
+
+var MatcherOccur = function(id, that, matcher, min, max) {
+  this.id = id;
+  this.that = that;
+  this.matcher = matcher;
+  this.min = min;
+  this.max = max;
+};
+MatcherOccur.prototype.exec = function() {
+  var that = this.that;
+  var backup = that._cursor;
+  var occurs = 0;
+  while (occurs < this.max) {
+    if (!this.matcher.exec()) break;
+    occurs++;
+  }
+  if (occurs >= this.min && occurs <= this.max) return true;
+  that._cursor = backup;
+  rollbackHooks(that._hooksChain, backup);
+  return false;
+};
+
+var MatcherSeq = function(id, that, children) { this.id = id; this.that = that; this.children = children; };
+MatcherSeq.prototype.exec = function() {
+  var that = this.that;
+  var backup = that._cursor;
+  var child, children = this.children;
+  for (var i = 0 ; i < children.length ; i++) {
+    child = children[i];
+    if (!child.exec()) {
+      that._cursor = backup;
+      rollbackHooks(that._hooksChain, backup);
+      return false;
+    }
+  }
+  return true;
+};
+
+var MatcherAlt = function(id, that, children) { this.id = id; this.that = that; this.children = children; };
+MatcherAlt.prototype.exec = function() {
+  var that = this.that;
+  var backup = that._cursor;
+  var child, children = this.children;
+  for (var i = 0 ; i < children.length ; i++) {
+    child = children[i];
+    that._cursor = backup;
+    if (child.exec()) return true;
+  }
+  that._cursor = backup;
+  return false;
+};
+
+
+/**
  * Transform a tree into a matching function.
  */
-function functionalize(root) {
+function functionalize(root, prefix) {
+  if (typeof prefix === 'undefined') prefix = "";
   var that = this;
-  var f, child, backup, i, rule, token, occurs, children;
+  var f, a, b, child, backup, i, rule, token, occurs, children;
   switch(root.id) {
       //------------------
     case "ID":
@@ -124,85 +299,37 @@ function functionalize(root) {
           throw Error("Unknown rule or token \"" + root.name + "\"!");
         }
         // Matching Token.
-        f = function() {
-          if (this.eof()) return false;
-          var tkn = this.next();
-          if (tkn.id == root.name) return true;
-          this._cursor--;
-          return false;
-        };
-        f.id = "Token_" + root.name;
-        return f;
+        return new MatcherToken( prefix + "/Token_" + root.name, that, root.name );
       }
-      f = function() {
-        return this._rules[root.name].call(this);
-      };
-      f.id = "Rule_" + root.name;
-      return f;
+      return new MatcherRule( prefix + "/Rule_" + root.name, that, root.name );
       //------------------
     case "OCCUR":
-      child = functionalize.call(that, root.children[0]);
-      if (root.min == 0 && root.max == 1) {
-        // Occur "?" = 0..1
-        f = function() {
-          child.call(that);
-          return true;
-        };
-        f.id = "Occur_zero_one";
-        return f;
-      }
-      f = function() {
-        backup = this._cursor;
-        occurs = 0;
-        while (occurs < root.max) {
-          if (!child.call(that)) break;
-        }
-        if (occurs >= root.min && occurs <= root.max) return true;
-        this._cursor = backup;
-        return false;
-      };
-      f.id = "Occur_" + root.min + "_" + root.max;
-      return f;
+      child = functionalize.call(
+        that,
+        root.children[0],
+        prefix + "/{" + root.min + "," + (root.max > 99999 ? "*" : root.max)  + "}"
+      );
+      return new MatcherOccur(
+        prefix + "/Occur_" + root.min + "_" + (root.max > 99999 ? "*" : root.max),
+        that, child, root.min, root.max
+      );
       //------------------
     case "SEQ":
       children = [];
       for (i = 0 ; i < root.children.length ; i++) {
-        children.push(functionalize.call(that, root.children[i]));
+        children.push(functionalize.call(that, root.children[i], prefix + "/SEQ[" + i + "]"));
       }
-      f = function() {
-        backup = this._cursor;
-        for (i = 0 ; i < children.length ; i++) {
-          child = children[i];
-          if (!child.call(that)) {
-            this._cursor = backup;
-            return false;
-          }
-        }
-        return true;
-      };
-      f.id = "SEQ";
-      return f;
+      return new MatcherSeq( prefix + "/SEQ", that, children );
       //------------------
     case "ALT":
       children = [];
       for (i = 0 ; i < root.children.length ; i++) {
-        children.push(functionalize.call(that, root.children[i]));
+        children.push(functionalize.call(that, root.children[i], prefix + "/ALT[" + i + "]"));
       }
-      f = function() {
-        backup = this._cursor;
-        for (i = 0 ; i < children.length ; i++) {
-          child = children[i];
-          this._cursor = backup;
-          if (child.call(that)) return true;
-        }
-        this._cursor = backup;
-        return false;
-      };
-      f.id = "ALT";
-      return f;
+      return new MatcherAlt( prefix + "/ALT", that, children );
       //------------------
-      case "OPEN":
-      return functionalize.call(that, root.children[0]);
+    case "OPEN":
+      return functionalize.call(that, root.children[0], "/()");
   }
   throw Error("Can't functionalize this: " + JSON.stringify(root));
 }
@@ -228,7 +355,7 @@ function insertIntoTree(root, node) {
     node.children = [root];
     return node;
   }
-  if (root.id == 'ALT' && root.children.length < 2) {
+  if (root.id == 'ALT' && (root.children.length < 2 || node.id == 'ALT')) {
     root.children.push(node);
     return root;
   }
@@ -306,4 +433,36 @@ function convertToken(tkn) {
       break;
   }
   return item;
+}
+
+
+function processHooks(hooksChain, hooks, context, tokens) {
+  var stack = [];
+  hooksChain.forEach(
+    function(hookItem, index) {
+      var last = stack.length - 1;
+      while (last > -1) {
+        if (stack[last].end > hookItem.begin) break;
+        f = hooks[stack.pop().id];
+        f.call(context, false, hookItem);
+        last--;
+      }
+      var f = hooks[hookItem.id];
+      if (typeof hookItem.end === 'undefined') {
+        // Token.
+        var tkn = tokens[hookItem.begin];
+        f.call(context, tkn.buffer.text.substr(tkn.begin, tkn.end - tkn.begin), hookItem);
+      } else {
+        // Rule.
+        stack.push(hookItem);
+        f.call(context, true, hookItem);
+      }
+    }
+  );
+  var slot, hookItem;
+  while (stack.length > 0) {
+    hookItem = stack.pop();
+    slot = hooks[hookItem.id];
+    slot.call(context, false, hookItem);
+  }
 }
