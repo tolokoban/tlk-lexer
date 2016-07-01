@@ -75,6 +75,14 @@ TlkLexer.prototype.loadText = function(text) {
 };
 
 
+/**
+ * @return void
+ */
+TlkLexer.prototype.text = function(token) {
+    return token.buffer.text.substr( token.begin, token.end - token.begin );
+};
+
+
 TlkLexer.create = function(tokensDefinition) {
   return new TlkLexer(tokensDefinition);
 };
