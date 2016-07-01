@@ -1,6 +1,6 @@
 {
   "name": "tlk-lexer",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Generic and versatil Lexer/Scanner",
   "main": "tlk-lexer.js",
   "scripts": {
@@ -11,7 +11,13 @@
     "type": "git",
     "url": "https://github.com/tolokoban/tlk-lexer.git"
   },
-  "keywords": ["tolokoban", "lexer", "scanner", "versatile", "generic"],
+  "keywords": [
+    "tolokoban",
+    "lexer",
+    "scanner",
+    "versatile",
+    "generic"
+  ],
   "author": "Tolokoban",
   "license": "GPL",
   "bugs": {
