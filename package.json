@@ -1,6 +1,6 @@
 {
   "name": "tlk-lexer",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Generic and versatil Lexer/Scanner",
   "main": "tlk-lexer.js",
   "scripts": {
