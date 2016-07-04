@@ -24,7 +24,7 @@
     "url": "https://github.com/tolokoban/tlk-lexer/issues"
   },
   "homepage": "https://github.com/tolokoban/tlk-lexer",
-  "dependencies": {
-    "jasmine": "^2.3.1"
+  "devDependencies": {
+    "jasmine": "^2.4.1"
   }
 }
