@@ -2,7 +2,7 @@
   "name": "tlk-lexer",
   "version": "0.0.4",
   "description": "Generic and versatil Lexer/Scanner",
-  "main": "tlk-lexer.js",
+  "main": "src/tlk-lexer.js",
   "scripts": {
     "test": "node node_modules/jasmine/bin/jasmine.js",
     "debug": "node --debug-brk node_modules/jasmine/bin/jasmine.js"
